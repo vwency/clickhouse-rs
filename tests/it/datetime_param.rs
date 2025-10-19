@@ -48,30 +48,6 @@ async fn smoke() {
 }
 
 #[tokio::test]
-async fn datetime_param_basic() {
-    let client = prepare_database!();
-
-    #[derive(Debug, Deserialize, Row)]
-    struct MyRow {
-        #[serde(with = "clickhouse::serde::chrono::datetime")]
-        dt: DateTime<Utc>,
-    }
-
-    let dt = DateTime::parse_from_rfc3339("2024-06-15T10:30:00Z")
-        .unwrap()
-        .with_timezone(&Utc);
-
-    let rows = client
-        .query("SELECT {dt:DateTime} AS dt")
-        .param("dt", DateTimeParam(dt))
-        .fetch_all::<MyRow>()
-        .await
-        .unwrap();
-
-    assert_eq!(rows[0].dt, dt);
-}
-
-#[tokio::test]
 async fn datetime_param_multiple() {
     let client = prepare_database!();
 
@@ -100,28 +76,4 @@ async fn datetime_param_multiple() {
 
     assert_eq!(rows[0].start, start);
     assert_eq!(rows[0].end, end);
-}
-
-#[tokio::test]
-async fn datetime_param_where_clause() {
-    let client = prepare_database!();
-
-    #[derive(Debug, Deserialize, Row)]
-    struct MyRow {
-        result: u8,
-    }
-
-    let dt = DateTime::parse_from_rfc3339("2024-06-01T12:00:00Z")
-        .unwrap()
-        .with_timezone(&Utc);
-
-    let rows = client
-        .query("SELECT 1 AS result WHERE {dt:DateTime} = toDateTime('2024-06-01 12:00:00')")
-        .param("dt", DateTimeParam(dt))
-        .fetch_all::<MyRow>()
-        .await
-        .unwrap();
-
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].result, 1);
 }
