@@ -227,4 +227,9 @@ impl Query {
             self.with_option(format!("param_{name}"), param)
         }
     }
+    #[cfg(feature = "chrono")]
+    pub fn datetime_param(self, name: &str, value: chrono::DateTime<chrono::Utc>) -> Self {
+        use crate::wrappers::datetime_params::DateTimeParam;
+        self.param(name, DateTimeParam(value))
+    }
 }

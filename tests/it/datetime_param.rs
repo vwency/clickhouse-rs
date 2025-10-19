@@ -3,7 +3,6 @@
 use serde::{Deserialize, Serialize};
 use clickhouse::Row;
 use chrono::{DateTime, Utc};
-use clickhouse::serde::chrono::DateTimeParam;
 
 #[tokio::test]
 async fn smoke() {
@@ -68,8 +67,8 @@ async fn datetime_param_multiple() {
 
     let rows = client
         .query("SELECT {start:DateTime} AS start, {end:DateTime} AS end")
-        .param("start", DateTimeParam(start))
-        .param("end", DateTimeParam(end))
+        .datetime_param("start", start)
+        .datetime_param("end", end)
         .fetch_all::<MyRow>()
         .await
         .unwrap();

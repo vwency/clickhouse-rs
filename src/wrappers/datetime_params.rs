@@ -24,3 +24,9 @@ impl Serialize for DateTimeParam {
         }
     }
 }
+
+impl From<DateTime<Utc>> for DateTimeParam {
+    fn from(dt: DateTime<Utc>) -> Self {
+        Self(dt)
+    }
+}
