@@ -126,11 +126,15 @@ pub mod chrono {
         where
             S: Serializer,
         {
-            let ts = dt.timestamp();
-
-            u32::try_from(ts)
-                .map_err(|_| S::Error::custom(format!("{dt} cannot be represented as DateTime")))?
-                .serialize(serializer)
+            if serializer.is_human_readable() {
+                let formatted = dt.format("%Y-%m-%d %H:%M:%S").to_string();
+                serializer.serialize_str(&formatted)
+            } else {
+                let ts = dt.timestamp();
+                u32::try_from(ts)
+                    .map_err(|_| S::Error::custom(format!("{dt} cannot be represented as DateTime")))?
+                    .serialize(serializer)
+            }
         }
 
         pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
@@ -141,6 +145,42 @@ pub mod chrono {
             DateTime::<Utc>::from_timestamp(i64::from(ts), 0).ok_or_else(|| {
                 D::Error::custom(format!("{ts} cannot be converted to DateTime<Utc>"))
             })
+        }
+    }
+
+
+    /// Wrapper type for `DateTime<Utc>` to use as query parameter.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct DateTimeParam(pub DateTime<Utc>);
+
+    impl Serialize for DateTimeParam {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            if serializer.is_human_readable() {
+                let formatted = self.0.format("%Y-%m-%d %H:%M:%S").to_string();
+                serializer.serialize_str(&formatted)
+            } else {
+                let ts = self.0.timestamp();
+                u32::try_from(ts)
+                    .map_err(|_| S::Error::custom(format!("{} cannot be represented as DateTime", self.0)))?
+                    .serialize(serializer)
+            }
+        }
+    }
+
+    impl From<DateTime<Utc>> for DateTimeParam {
+        fn from(dt: DateTime<Utc>) -> Self {
+            DateTimeParam(dt)
+        }
+    }
+
+    impl std::ops::Deref for DateTimeParam {
+        type Target = DateTime<Utc>;
+        
+        fn deref(&self) -> &Self::Target {
+            &self.0
         }
     }
 
