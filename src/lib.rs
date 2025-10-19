@@ -26,6 +26,7 @@ pub mod inserter;
 pub mod query;
 pub mod serde;
 pub mod sql;
+pub mod wrappers;
 #[cfg(feature = "test-util")]
 pub mod test;
 
