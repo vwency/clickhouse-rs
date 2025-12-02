@@ -136,9 +136,14 @@ impl<'ser, B: BufMut, R: Row, V: SchemaValidator<R>> Serializer
     #[inline]
     fn serialize_bytes(self, v: &[u8]) -> Result<()> {
         let size = v.len();
-        self.validator.validate(SerdeType::Bytes(size))?;
-        put_leb128(&mut self.buffer, size as u64);
-        self.buffer.put_slice(v);
+        let validation_result = self.validator.validate(SerdeType::Bytes(size))?;
+        
+        if validation_result.is_fixed_string() {
+            self.buffer.put_slice(v);
+        } else {
+            put_leb128(&mut self.buffer, size as u64);
+            self.buffer.put_slice(v);
+        }
         Ok(())
     }
 

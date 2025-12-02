@@ -886,3 +886,112 @@ pub mod time {
         }
     }
 }
+
+
+pub mod qbit {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde::de::{SeqAccess, Visitor};
+    use serde::ser::SerializeTuple;
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct QBit {
+        pub data: Vec<Vec<u8>>,
+    }
+
+    impl QBit {
+        pub fn new(num_components: usize, dimension: usize) -> Self {
+            Self {
+                data: vec![vec![0u8; dimension]; num_components],
+            }
+        }
+
+        pub fn from_data(data: Vec<Vec<u8>>) -> Self {
+            Self { data }
+        }
+    }
+
+    impl Serialize for QBit {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let mut tuple = serializer.serialize_tuple(self.data.len())?;
+            for component in &self.data {
+                tuple.serialize_element(component)?;
+            }
+            tuple.end()
+        }
+    }
+
+    impl<'de> Deserialize<'de> for QBit {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            struct QBitVisitor;
+
+            impl<'de> Visitor<'de> for QBitVisitor {
+                type Value = QBit;
+
+                fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    formatter.write_str("a QBit tuple")
+                }
+
+                fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+                where
+                    A: SeqAccess<'de>,
+                {
+                    let mut data = Vec::new();
+
+                    while let Some(component) = seq.next_element::<Vec<u8>>()? {
+                        data.push(component);
+                    }
+
+                    Ok(QBit { data })
+                }
+            }
+
+            deserializer.deserialize_tuple(usize::MAX, QBitVisitor)
+        }
+    }
+
+    pub fn serialize<S>(qbit: &QBit, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        qbit.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<QBit, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        QBit::deserialize(deserializer)
+    }
+
+    option!(QBit, "Ser/de `Option<QBit>` to/from `Nullable(QBit(...))`.");
+
+    pub mod bfloat16 {
+        use super::QBit;
+        
+        pub fn new(dimension: usize) -> QBit {
+            QBit::new(16, dimension)
+        }
+    }
+
+    pub mod float32 {
+        use super::QBit;
+        
+        pub fn new(dimension: usize) -> QBit {
+            QBit::new(32, dimension)
+        }
+    }
+
+    pub mod float64 {
+        use super::QBit;
+        
+        pub fn new(dimension: usize) -> QBit {
+            QBit::new(64, dimension)
+        }
+    }
+}

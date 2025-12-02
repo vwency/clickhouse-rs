@@ -1,7 +1,7 @@
 use crate::error::{Error, Result};
 use crate::types::int256;
 use crate::{Row, row::RowKind, row_metadata::RowMetadata};
-use clickhouse_types::data_types::{Column, DataTypeNode, DecimalType, EnumType};
+use clickhouse_types::data_types::{Column, DataTypeNode, DecimalType, EnumType, QBitElementType};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::marker::PhantomData;
@@ -33,6 +33,12 @@ pub(crate) trait SchemaValidator<R: Row>: Sized {
     // If the database schema contains a tuple with more elements than it is defined in the struct,
     // this method will emit an error indicating that the struct definition is incomplete.
     fn check_tuple_fully_validated(&self) -> Result<()>;
+        fn is_fixed_string(&self) -> bool {
+        false
+    }
+    fn get_fixed_string_size(&self) -> Result<usize> {
+        Err(Error::SchemaMismatch("Not a FixedString".to_string()))
+    }
 }
 
 pub(crate) struct DataTypeValidator<'caller, R: Row> {
@@ -236,6 +242,11 @@ pub(crate) enum InnerDataTypeValidatorKind<'caller> {
     Enum(&'caller HashMap<i16, String>),
     Variant(&'caller [DataTypeNode], VariantValidationState),
     Nullable(&'caller DataTypeNode),
+    QBit {
+        dimension: usize,
+        num_components: usize,
+        current_component: usize,
+    },
 }
 
 #[derive(Debug)]
@@ -360,6 +371,44 @@ impl<'caller, R: Row> SchemaValidator<R> for Option<InnerDataTypeValidator<'_, '
             InnerDataTypeValidatorKind::Enum(_values_map) => {
                 unreachable!()
             }
+
+            
+            InnerDataTypeValidatorKind::QBit { 
+                dimension, 
+                num_components, 
+                current_component 
+            } => {
+                match serde_type {
+                    SerdeType::Bytes(len) | SerdeType::ByteBuf(len) if len == *dimension => {
+                        if *current_component >= *num_components {
+                            let (full_name, full_data_type) =
+                                inner.root.get_current_column_name_and_type()?;
+                            
+                            return Err(Error::SchemaMismatch(format!(
+                                "While processing column {full_name} defined as {full_data_type}: \
+                                too many components in QBit, expected {num_components}"
+                            )));
+                        }
+                        
+                        *current_component += 1;
+                        
+                        Ok(Some(InnerDataTypeValidator {
+                            root: inner.root,
+                            kind: InnerDataTypeValidatorKind::FixedString(*dimension),
+                        }))
+                    }
+                    _ => {
+                        let (full_name, full_data_type) =
+                            inner.root.get_current_column_name_and_type()?;
+                        
+                        Err(Error::SchemaMismatch(format!(
+                            "While processing column {full_name} defined as {full_data_type}: \
+                            expected FixedString({dimension}) component in QBit, got {serde_type}"
+                        )))
+                    }
+                }
+            }
+
         }
     }
 
@@ -411,6 +460,23 @@ impl<'caller, R: Row> SchemaValidator<R> for Option<InnerDataTypeValidator<'_, '
     #[cold]
     fn get_schema_index(&self, _struct_idx: usize) -> Result<usize> {
         unreachable!()
+    }
+
+    fn is_fixed_string(&self) -> bool {
+        if let Some(inner) = self {
+            matches!(inner.kind, InnerDataTypeValidatorKind::FixedString(_))
+        } else {
+            false
+        }
+    }
+
+    fn get_fixed_string_size(&self) -> Result<usize> {
+        if let Some(inner) = self {
+            if let InnerDataTypeValidatorKind::FixedString(size) = inner.kind {
+                return Ok(size);
+            }
+        }
+        Err(Error::SchemaMismatch("Not a FixedString".to_string()))
     }
 
     fn check_tuple_fully_validated(&self) -> Result<()> {
@@ -583,20 +649,27 @@ fn validate_impl<'serde, 'caller, R: Row>(
             _ => root.err_on_schema_mismatch(data_type, serde_type, is_inner),
         },
         SerdeType::Tuple(len) => match data_type {
-            DataTypeNode::FixedString(n) => {
-                if n == len {
+            DataTypeNode::QBit(element_type, dimension) => {
+                let num_components = element_type.num_components();
+                if *len == num_components {
                     Ok(Some(InnerDataTypeValidator {
                         root,
-                        kind: InnerDataTypeValidatorKind::FixedString(*n),
+                        kind: InnerDataTypeValidatorKind::QBit {
+                            dimension: *dimension,
+                            num_components,
+                            current_component: 0,
+                        },
                     }))
                 } else {
                     let (full_name, full_data_type) = root.get_current_column_name_and_type()?;
                     Err(Error::SchemaMismatch(format!(
-                        "While processing column {full_name} defined as {full_data_type}: attempting to (de)serialize \
-                        nested ClickHouse type {data_type} as {serde_type}",
+                        "While processing column {full_name} defined as {full_data_type}: \
+                         QBit tuple length mismatch: expected {num_components} components, got {len}"
                     )))
                 }
             }
+
+            
             DataTypeNode::Tuple(elements) => Ok(Some(InnerDataTypeValidator {
                 root,
                 kind: InnerDataTypeValidatorKind::Tuple(elements),
@@ -647,6 +720,44 @@ fn validate_impl<'serde, 'caller, R: Row>(
             }
         }
 
+       SerdeType::QBit { element_type, dimension } => {
+            // QBit(QBitElementType, usize) - это tuple variant!
+            if let DataTypeNode::QBit(db_elem, db_dim) = data_type {
+                // Проверяем совпадение типа элемента
+                if element_type != db_elem {
+                    let (full_name, full_data_type) = root.get_current_column_name_and_type()?;
+                    return Err(Error::SchemaMismatch(format!(
+                        "While processing column {full_name} defined as {full_data_type}: \
+                         QBit element type mismatch: expected {:?}, got {:?}",
+                        db_elem, element_type
+                    )));
+                }
+                
+                // Проверяем совпадение размерности
+                if *dimension != *db_dim {
+                    let (full_name, full_data_type) = root.get_current_column_name_and_type()?;
+                    return Err(Error::SchemaMismatch(format!(
+                        "While processing column {full_name} defined as {full_data_type}: \
+                         QBit dimension mismatch: expected {}, got {}",
+                        db_dim, dimension
+                    )));
+                }
+                
+                // Создаем валидатор для QBit
+                Ok(Some(InnerDataTypeValidator {
+                    root,
+                    kind: InnerDataTypeValidatorKind::QBit {
+                        dimension: *db_dim,
+                        num_components: element_type.num_components(),
+                        current_component: 0,
+                    },
+                }))
+            } else {
+                root.err_on_schema_mismatch(data_type, serde_type, is_inner)
+            }
+        }
+
+
         _ => root.err_on_schema_mismatch(
             data_type,
             serde_type,
@@ -683,6 +794,10 @@ impl<R: Row> SchemaValidator<R> for () {
     fn check_tuple_fully_validated(&self) -> Result<()> {
         Ok(())
     }
+    #[cold]
+    fn get_fixed_string_size(&self) -> Result<usize> {
+        unreachable!()
+    }
 }
 
 /// Which Serde data type (De)serializer used for the given type.
@@ -712,6 +827,10 @@ pub(crate) enum SerdeType {
     Tuple(usize),
     Seq(usize),
     Map(usize),
+    QBit {
+        element_type: QBitElementType,
+        dimension: usize,
+    },
     // Identifier,
     // Char,
     // Unit,
@@ -747,6 +866,9 @@ impl Display for SerdeType {
             SerdeType::Seq(_len) => write!(f, "Vec<T>"),
             SerdeType::Tuple(len) => write!(f, "a tuple or sequence with length {len}"),
             SerdeType::Map(_len) => write!(f, "Map<K, V>"),
+            SerdeType::QBit { element_type, dimension } => {
+                write!(f, "QBit({:?}, {})", element_type, dimension)
+            }
             // SerdeType::Identifier => "identifier",
             // SerdeType::Char => "char",
             // SerdeType::Unit => "()",

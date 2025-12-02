@@ -101,6 +101,16 @@ pub enum DataTypeNode {
     MultiLineString,
     Polygon,
     MultiPolygon,
+    QBit(QBitElementType, usize),
+}
+
+
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum QBitElementType {
+    BFloat16,
+    Float32,
+    Float64,
 }
 
 impl DataTypeNode {
@@ -158,6 +168,7 @@ impl DataTypeNode {
             str if str.starts_with("Map") => parse_map(str),
             str if str.starts_with("Tuple") => parse_tuple(str),
             str if str.starts_with("Variant") => parse_variant(str),
+            str if str.starts_with("QBit") => parse_qbit(str),
 
             // ...
             str => Err(TypesError::TypeParsingError(format!(
@@ -278,6 +289,9 @@ impl Display for DataTypeNode {
             MultiLineString => write!(f, "MultiLineString"),
             Polygon => write!(f, "Polygon"),
             MultiPolygon => write!(f, "MultiPolygon"),
+            QBit(element_type, dimension) => {
+                write!(f, "QBit({element_type}, {dimension})")
+            }
         }
     }
 }
@@ -394,6 +408,25 @@ impl Display for DateTimePrecision {
             DateTimePrecision::Precision7 => write!(f, "7"),
             DateTimePrecision::Precision8 => write!(f, "8"),
             DateTimePrecision::Precision9 => write!(f, "9"),
+        }
+    }
+}
+impl QBitElementType {
+    pub fn num_components(&self) -> usize {
+        match self {
+            QBitElementType::BFloat16 => 16,
+            QBitElementType::Float32 => 32,
+            QBitElementType::Float64 => 64,
+        }
+    }
+}
+
+impl Display for QBitElementType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QBitElementType::BFloat16 => write!(f, "BFloat16"),
+            QBitElementType::Float32 => write!(f, "Float32"),
+            QBitElementType::Float64 => write!(f, "Float64"),
         }
     }
 }
@@ -658,6 +691,51 @@ fn parse_variant(input: &str) -> Result<DataTypeNode, TypesError> {
         "Invalid Variant format, expected Variant(Type1, Type2, ...), got {input}"
     )))
 }
+
+
+
+fn parse_qbit(input: &str) -> Result<DataTypeNode, TypesError> {
+    // QBit(element_type, dimension)
+    if input.len() >= 10 {
+        let params_str = &input[5..input.len() - 1]; // Skip "QBit(" and ")"
+        let params: Vec<&str> = params_str.split(", ").collect();
+        
+        if params.len() != 2 {
+            return Err(TypesError::TypeParsingError(format!(
+                "Invalid QBit format, expected QBit(element_type, dimension), got {input}"
+            )));
+        }
+        
+        let element_type = match params[0] {
+            "BFloat16" => QBitElementType::BFloat16,
+            "Float32" => QBitElementType::Float32,
+            "Float64" => QBitElementType::Float64,
+            _ => return Err(TypesError::TypeParsingError(format!(
+                "Invalid QBit element type, expected BFloat16, Float32, or Float64, got {}",
+                params[0]
+            ))),
+        };
+        
+        let dimension = params[1].parse::<usize>().map_err(|err| {
+            TypesError::TypeParsingError(format!(
+                "Invalid QBit dimension, expected a valid number. Underlying error: {err}, input: {input}"
+            ))
+        })?;
+        
+        if dimension == 0 {
+            return Err(TypesError::TypeParsingError(format!(
+                "Invalid QBit dimension, expected a positive number, got zero. Input: {input}"
+            )));
+        }
+        
+        return Ok(DataTypeNode::QBit(element_type, dimension));
+    }
+    
+    Err(TypesError::TypeParsingError(format!(
+        "Invalid QBit format, expected QBit(element_type, dimension), got {input}"
+    )))
+}
+
 
 /// Considers the element type parsed once we reach a comma outside of parens AND after an unescaped tick.
 /// The most complicated cases are values names in the self-defined Enum types:
@@ -958,6 +1036,10 @@ mod tests {
         assert_eq!(
             DataTypeNode::new("JSON(max_dynamic_types=8, max_dynamic_paths=64)").unwrap(),
             DataTypeNode::JSON
+        );
+        assert_eq!(
+            DataTypeNode::new("QBit(BFloat16, 1)").unwrap(),
+            DataTypeNode::QBit(QBitElementType::BFloat16, 1)
         );
         assert!(DataTypeNode::new("SomeUnknownType").is_err());
     }
