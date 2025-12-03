@@ -137,7 +137,7 @@ impl<'ser, B: BufMut, R: Row, V: SchemaValidator<R>> Serializer
     fn serialize_bytes(self, v: &[u8]) -> Result<()> {
         let size = v.len();
         let validation_result = self.validator.validate(SerdeType::Bytes(size))?;
-        
+
         if validation_result.is_fixed_string() {
             self.buffer.put_slice(v);
         } else {

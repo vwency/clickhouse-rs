@@ -888,110 +888,117 @@ pub mod time {
 }
 
 
+
+
 pub mod qbit {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use serde::de::{SeqAccess, Visitor};
-    use serde::ser::SerializeTuple;
+    use serde::{Deserializer, Serializer};
+    use serde::de::Visitor;
+    use std::fmt;
+
+    pub const MODULE_PATH: &str = "clickhouse::serde::qbit::QBit";
 
     #[derive(Debug, Clone, PartialEq)]
-    pub struct QBit {
-        pub data: Vec<Vec<u8>>,
+    pub struct QBit<const N: usize> {
+        pub data: Vec<[u8; N]>,
     }
 
-    impl QBit {
-        pub fn new(num_components: usize, dimension: usize) -> Self {
+    impl<const N: usize> QBit<N> {
+        pub fn new(num_components: usize) -> Self {
             Self {
-                data: vec![vec![0u8; dimension]; num_components],
+                data: vec![[0u8; N]; num_components],
             }
         }
 
-        pub fn from_data(data: Vec<Vec<u8>>) -> Self {
+        pub fn from_data(data: Vec<[u8; N]>) -> Self {
             Self { data }
+        }
+
+        pub fn num_components(&self) -> usize {
+            self.data.len()
         }
     }
 
-    impl Serialize for QBit {
+    impl<const N: usize> serde::Serialize for QBit<N> {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where
             S: Serializer,
         {
+            use serde::ser::SerializeTuple;
+            
             let mut tuple = serializer.serialize_tuple(self.data.len())?;
+            
             for component in &self.data {
-                tuple.serialize_element(component)?;
+                tuple.serialize_element(&component[..])?;
             }
+            
             tuple.end()
         }
     }
 
-    impl<'de> Deserialize<'de> for QBit {
+    impl<'de, const N: usize> serde::Deserialize<'de> for QBit<N> {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
         where
             D: Deserializer<'de>,
         {
-            struct QBitVisitor;
+            struct QBitVisitor<const N: usize>;
+            
+            impl<'de, const N: usize> Visitor<'de> for QBitVisitor<N> {
+                type Value = QBit<N>;
 
-            impl<'de> Visitor<'de> for QBitVisitor {
-                type Value = QBit;
-
-                fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                    formatter.write_str("a QBit tuple")
+                fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    write!(formatter, "tuple of byte arrays for QBit<{}>", N)
                 }
 
                 fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
                 where
-                    A: SeqAccess<'de>,
+                    A: serde::de::SeqAccess<'de>,
                 {
                     let mut data = Vec::new();
-
-                    while let Some(component) = seq.next_element::<Vec<u8>>()? {
-                        data.push(component);
+                    
+                    while let Some(bytes) = seq.next_element::<&[u8]>()? {
+                        if bytes.len() != N {
+                            return Err(serde::de::Error::custom(format!(
+                                "Invalid component length: expected {}, got {}",
+                                N,
+                                bytes.len()
+                            )));
+                        }
+                        
+                        let mut arr = [0u8; N];
+                        arr.copy_from_slice(bytes);
+                        data.push(arr);
                     }
-
+                    
                     Ok(QBit { data })
                 }
             }
 
-            deserializer.deserialize_tuple(usize::MAX, QBitVisitor)
+            deserializer.deserialize_tuple(0, QBitVisitor::<N>)
         }
     }
 
-    pub fn serialize<S>(qbit: &QBit, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        qbit.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<QBit, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        QBit::deserialize(deserializer)
-    }
-
-    option!(QBit, "Ser/de `Option<QBit>` to/from `Nullable(QBit(...))`.");
+    pub type QBit16 = QBit<128>;
+    pub type QBit32 = QBit<256>;
+    pub type QBit64 = QBit<512>;
 
     pub mod bfloat16 {
-        use super::QBit;
-        
-        pub fn new(dimension: usize) -> QBit {
-            QBit::new(16, dimension)
+        use super::QBit16;
+        pub fn new(num_components: usize) -> QBit16 {
+            QBit16::new(num_components)
         }
     }
 
     pub mod float32 {
-        use super::QBit;
-        
-        pub fn new(dimension: usize) -> QBit {
-            QBit::new(32, dimension)
+        use super::QBit32;
+        pub fn new(num_components: usize) -> QBit32 {
+            QBit32::new(num_components)
         }
     }
 
     pub mod float64 {
-        use super::QBit;
-        
-        pub fn new(dimension: usize) -> QBit {
-            QBit::new(64, dimension)
+        use super::QBit64;
+        pub fn new(num_components: usize) -> QBit64 {
+            QBit64::new(num_components)
         }
     }
 }
